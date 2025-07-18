@@ -16,28 +16,41 @@ export function useAuth() {
   const router = useRouter();
 
   useEffect(() => {
-    // Bad practice: checking token on every render without memoization
-    const checkAuth = () => {
-      const token = localStorage.getItem("token");
-      if (token) {
-        try {
-          // Bad practice: decoding JWT without proper verification
-          const payload = JSON.parse(atob(token.split(".")[1]));
-          setUser({
-            userId: payload.userId,
-            username: payload.username,
-            email: payload.email,
-            fullName: payload.fullName,
+    // IMPROVED: memoized token verification with proper error handling
+    const checkAuth = async () => {
+      try {
+        const token = localStorage.getItem("token");
+        if (token) {
+          // IMPROVED: Verify token with server instead of client-side decoding
+          const response = await fetch("/api/verify-token", {
+            headers: {
+              Authorization: `Bearer ${token}`,
+            },
           });
-        } catch (error) {
-          console.error("Token decode error:", error);
-          localStorage.removeItem("token");
+          
+          if (response.ok) {
+            const userData = await response.json();
+            setUser({
+              userId: userData.id,
+              username: userData.username,
+              email: userData.email,
+              fullName: userData.fullName,
+            });
+          } else {
+            // Token is invalid, remove it
+            localStorage.removeItem("token");
+            setUser(null);
+          }
+        } else {
           setUser(null);
         }
-      } else {
+      } catch (error) {
+        console.error("Auth check failed:", error);
+        localStorage.removeItem("token");
         setUser(null);
+      } finally {
+        setLoading(false);
       }
-      setLoading(false);
     };
 
     checkAuth();
@@ -51,11 +64,13 @@ export function useAuth() {
       email: userData.email,
       fullName: userData.fullName,
     });
+    setLoading(false);
   };
 
   const logout = () => {
     localStorage.removeItem("token");
     setUser(null);
+    setLoading(false);
     router.push("/login");
   };
 

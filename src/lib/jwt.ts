@@ -1,17 +1,44 @@
 import jwt from "jsonwebtoken";
 
+// Define consistent token payload interface
+export interface TokenPayload {
+  userId: string;
+  username: string;
+  email: string;
+  fullName: string;
+  role: string;
+}
+
 // Bad practice: hardcoded secret key
-const JWT_SECRET =
-  process.env.JWT_SECRET || "super-secret-key-for-workshop-demo-only";
+const JWT_SECRET: string = (() => {
+  const secret = process.env.JWT_SECRET;
+  if (!secret) {
+    throw new Error("JWT_SECRET environment variable is not set.");
+  }
+  return secret;
+})();
+//IMPROVED: Use environment variable for secret key
 
 // Bad practice: no token expiration management
-export function generateToken(payload: any) {
+export async function generateToken(payload: TokenPayload, expiresIn: string = "1h"): Promise<string> {
   console.time("JWT Token Generation");
   try {
     // Bad practice: using synchronous operations
-    const token = jwt.sign(payload, JWT_SECRET, {
-      expiresIn: "24h", // Bad practice: long expiration for demo
+    const token = await new Promise<string>((resolve, reject) => {
+      jwt.sign(
+        payload,
+        JWT_SECRET,
+        { expiresIn: expiresIn } as jwt.SignOptions,
+        (err: any, token?: string) => {
+          if (err || !token) {
+            reject(err);
+          } else {
+            resolve(token);
+          }
+        }
+      );
     });
+    //IMPROVED: Use async/await for better readability and error handling
     console.timeEnd("JWT Token Generation");
     return token;
   } catch (error) {
@@ -22,13 +49,23 @@ export function generateToken(payload: any) {
 }
 
 // Bad practice: no proper error handling
-export function verifyToken(token: string) {
+export async function verifyToken(token: string): Promise<TokenPayload> {
   console.time("JWT Token Verification");
   try {
     // Bad practice: using synchronous operations
-    const decoded = jwt.verify(token, JWT_SECRET);
+    const decoded = await new Promise((resolve, reject) => {
+      jwt.verify(token, JWT_SECRET, (err, decoded) => {
+        if (err) {
+          reject(err);
+        } else {
+          resolve(decoded);
+        }
+      });
+    });
+    //IMPROVED: Use async/await for better readability and error handling
+    //IMPROVED: Use a promise to handle async verification
     console.timeEnd("JWT Token Verification");
-    return decoded;
+    return decoded as TokenPayload;
   } catch (error) {
     console.error("JWT verification error:", error);
     console.timeEnd("JWT Token Verification");
@@ -37,7 +74,7 @@ export function verifyToken(token: string) {
 }
 
 // Bad practice: middleware without proper error handling
-export function authMiddleware(handler: Function) {
+export function authMiddleware(handler: (request: Request & { user?: TokenPayload }) => Promise<Response> | Response) {
   return async (request: Request) => {
     console.time("Auth Middleware Execution");
 
@@ -53,13 +90,15 @@ export function authMiddleware(handler: Function) {
       }
 
       const token = authHeader.substring(7);
-      const decoded = verifyToken(token);
+      const decoded = await verifyToken(token);
 
-      // Bad practice: adding user to request object without proper typing
-      (request as any).user = decoded;
+      // Properly add user to request object with typing
+      const reqWithUser = Object.assign(request, { user: decoded }) as Request & { user?: TokenPayload };
 
       console.timeEnd("Auth Middleware Execution");
-      return handler(request);
+      return handler(reqWithUser);
+      //IMPROVED: Properly handle the request and return the handler's response
+
     } catch (error) {
       console.error("Auth middleware error:", error);
       console.timeEnd("Auth Middleware Execution");
@@ -70,3 +109,4 @@ export function authMiddleware(handler: Function) {
     }
   };
 }
+//IMPROVED: Use proper error handling and response structure

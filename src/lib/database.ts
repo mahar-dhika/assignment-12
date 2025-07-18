@@ -7,10 +7,13 @@ const pool = new Pool({
   database: process.env.DB_NAME || "workshop_db",
   password: process.env.DB_PASSWORD || "admin123",
   port: parseInt(process.env.DB_PORT || "5432"),
+  // SSL configuration for remote databases (like Render)
+  ssl: process.env.DB_HOST && process.env.DB_HOST.includes('render.com') ? { rejectUnauthorized: false } : false,
   // Bad practice: no connection pooling limits for demo
-  max: 100,
-  idleTimeoutMillis: 30000,
+  max: 10, // Set a reasonable pool size
+  idleTimeoutMillis: 10000, // Release idle clients after 10 seconds
   connectionTimeoutMillis: 2000,
+  //IMPROVED: Use connection pooling for better performance
 });
 
 // Log database configuration for debugging (only in development)
@@ -24,25 +27,40 @@ if (process.env.NODE_ENV === "development") {
 }
 
 // Bad practice: raw SQL queries without proper error handling
-export async function executeQuery(query: string, params: any[] = []) {
-  console.time("Database Query Execution");
-  try {
-    const client = await pool.connect();
-    const result = await client.query(query, params);
-    client.release();
-    console.timeEnd("Database Query Execution");
-    return result;
-  } catch (error) {
-    console.error("Database error:", error);
-    console.timeEnd("Database Query Execution");
-    throw error;
-  }
+interface QueryConfig {
+  text: string;
+  values?: any[];
 }
 
-// Bad practice: no connection pooling management
-export async function closePool() {
-  await pool.end();
+export async function executeQuery<T = any>(config: QueryConfig): Promise<T[]> {
+  console.time("Database Query Execution");
+  const client = await pool.connect();
+  try {
+    const result = await client.query(config);
+    console.timeEnd("Database Query Execution");
+    return result.rows;
+  } catch (error) {
+    console.error("Database error:", error);
+    throw new Error("Database query failed");
+  } finally {
+    client.release();
+  }
 }
+//IMPROVED: Use not raw SQL queries, handle errors properly, and ensure connection release
+
+// Bad practice: no connection pooling management
+// Properly close the connection pool when shutting down the application
+export async function closePool() {
+  try {
+    await pool.end();
+    if (process.env.NODE_ENV === "development") {
+      console.log("Database connection pool closed.");
+    }
+  } catch (error) {
+    console.error("Error closing database pool:", error);
+  }
+}
+//IMPROVED: Use connection pooling to manage database connections efficiently
 
 // Initialize database tables
 export async function initializeDatabase() {
@@ -61,7 +79,7 @@ export async function initializeDatabase() {
   `;
 
   try {
-    await executeQuery(createUsersTable);
+    await executeQuery({ text: createUsersTable });
     console.log("Database initialized successfully");
   } catch (error) {
     console.error("Failed to initialize database:", error);

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 
@@ -16,33 +16,45 @@ export default function Navbar() {
   const [showDropdown, setShowDropdown] = useState(false);
   const router = useRouter();
 
+  const handleClickOutside = useCallback(() => {
+    setShowDropdown(false);
+  }, []);
+
   useEffect(() => {
     // Bad practice: checking token on every render
     const token = localStorage.getItem("token");
-    if (token) {
-      try {
-        // Bad practice: decoding JWT without proper verification
-        const payload = JSON.parse(atob(token.split(".")[1]));
-        setUser({
-          userId: payload.userId,
-          username: payload.username,
-          email: payload.email,
-          fullName: payload.fullName,
-        });
-      } catch (error) {
-        console.error("Token decode error:", error);
-        localStorage.removeItem("token");
-        router.push("/login");
-      }
+    if (!token) return;
+
+    try {
+      // Bad practice: decoding JWT without proper verification
+      const [, payloadBase64] = token.split(".");
+      if (!payloadBase64) throw new Error("Invalid token format");
+      const payload = JSON.parse(atob(payloadBase64));
+      setUser({
+        userId: payload.userId,
+        username: payload.username,
+        email: payload.email,
+        fullName: payload.fullName,
+      });
+    } catch (error) {
+      console.error("Token decode error:", error);
+      localStorage.removeItem("token");
+      router.push("/login");
     }
   }, [router]);
+  //IMPROVED: token verification should be done on the server side
+  //IMPROVED: use a proper token verification method
 
   const handleLogout = () => {
     // Bad practice: no proper cleanup
     localStorage.removeItem("token");
     setUser(null);
     setShowDropdown(false);
+    // Clear all user-related data from localStorage/sessionStorage if any
+    localStorage.removeItem("user");
+    sessionStorage.clear();
     router.push("/login");
+    //IMPROVED: redirect to login page after logout
   };
 
   if (!user) {
@@ -105,13 +117,15 @@ export default function Navbar() {
         </div>
       </div>
 
-      {/* Bad practice: click outside handler without useCallback */}
+      {/* Bad practice: click outside handler without useCallback > ALREADY IMPROVED*/}
       {showDropdown && (
         <div
           className="fixed inset-0 z-40"
-          onClick={() => setShowDropdown(false)}
+          onClick={handleClickOutside}
         />
       )}
+
+      
     </nav>
   );
 }

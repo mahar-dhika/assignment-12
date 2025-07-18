@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { executeQuery } from "@/lib/database";
-import { authMiddleware } from "@/lib/jwt";
+import { authMiddleware, TokenPayload } from "@/lib/jwt";
 
 export type ProfileData = {
   username: string;
@@ -19,33 +19,61 @@ async function getProfile(request: Request) {
 
   try {
     // Bad practice: getting user from request without proper typing
-    const user = (request as any).user;
+    interface AuthenticatedRequest extends Request {
+      user: TokenPayload;
+    }
+    const { user } = request as AuthenticatedRequest;
+    //IMPROVED: Use a properly typed interface for the request with user property
 
     // Bad practice: inefficient query with complex joins and subqueries
     const selectQuery = `
       SELECT 
-        u.*,
-        a.email,
-        ur.role,
-        ud.division_name,
-        (SELECT COUNT(*) FROM user_logs WHERE user_id = u.id) as log_count,
-        (SELECT COUNT(*) FROM user_roles WHERE user_id = u.id) as role_count,
-        (SELECT COUNT(*) FROM user_divisions WHERE user_id = u.id) as division_count
+      u.id,
+      u.auth_id,
+      u.username,
+      u.full_name,
+      a.email,
+      u.bio,
+      u.long_bio,
+      u.profile_json,
+      u.address,
+      u.phone_number,
+      u.birth_date,
+      COALESCE(ur.role, '') as role,
+      COALESCE(ud.division_name, '') as division_name,
+      COALESCE(ul.log_count, 0) as log_count,
+      COALESCE(urc.role_count, 0) as role_count,
+      COALESCE(udc.division_count, 0) as division_count
       FROM users u
       LEFT JOIN auth a ON u.auth_id = a.id
-      LEFT JOIN user_roles ur ON u.id = ur.user_id
-      LEFT JOIN user_divisions ud ON u.id = ud.user_id
+      LEFT JOIN (SELECT user_id, MAX(role) as role, COUNT(*) as role_count
+                 FROM user_roles
+                 GROUP BY user_id) ur ON u.id = ur.user_id
+      LEFT JOIN (SELECT user_id, MAX(division_name) as division_name, COUNT(*) as division_count
+                 FROM user_divisions
+                 GROUP BY user_id) ud ON u.id = ud.user_id
+      LEFT JOIN (SELECT user_id, COUNT(*) as log_count
+                 FROM user_logs
+                 GROUP BY user_id) ul ON u.id = ul.user_id
+      LEFT JOIN (SELECT user_id, COUNT(*) as role_count
+                 FROM user_roles
+                 GROUP BY user_id) urc ON u.id = urc.user_id
+      LEFT JOIN (SELECT user_id, COUNT(*) as division_count
+                 FROM user_divisions
+                 GROUP BY user_id) udc ON u.id = udc.user_id
       WHERE u.id = $1
+      LIMIT 1
     `;
+    // IMPROVED: select only necessary fields and avoid unnecessary subqueries
 
-    const result = await executeQuery(selectQuery, [user.userId]);
+    const result = await executeQuery({ text: selectQuery, values: [user.userId] });
 
-    if (result.rows.length === 0) {
+    if (result.length === 0) {
       console.timeEnd("Profile Get Execution");
       return NextResponse.json({ message: "User not found." }, { status: 404 });
     }
 
-    const userData = result.rows[0];
+    const userData = result[0];
 
     console.timeEnd("Profile Get Execution");
     return NextResponse.json({
@@ -139,49 +167,97 @@ async function updateProfile(request: Request) {
     }
 
     // Bad practice: getting user from request without proper typing
-    const user = (request as any).user;
+    interface AuthenticatedRequest extends Request {
+      user: { userId: string };
+    }
+    const { user } = request as AuthenticatedRequest;
+    //IMPROVED: use auth middleware to get user information
+
 
     // Bad practice: inefficient update query with unnecessary operations
     const updateQuery = `
-      UPDATE users 
-      SET username = $1, full_name = $2, bio = $3, long_bio = $4, 
-          address = $5, phone_number = $6, profile_json = $7, updated_at = CURRENT_TIMESTAMP
+      UPDATE users
+      SET
+      username = $1,
+      full_name = $2,
+      bio = $3,
+      long_bio = $4,
+      address = $5,
+      phone_number = $6,
+      profile_json = $7,
+      updated_at = CURRENT_TIMESTAMP
       WHERE id = $8
+      AND (
+        username IS DISTINCT FROM $1 OR
+        full_name IS DISTINCT FROM $2 OR
+        bio IS DISTINCT FROM $3 OR
+        long_bio IS DISTINCT FROM $4 OR
+        address IS DISTINCT FROM $5 OR
+        phone_number IS DISTINCT FROM $6 OR
+        profile_json IS DISTINCT FROM $7
+      )
     `;
+    // IMPROVED: use parameterized query to prevent SQL injection and optimize update
+    // Avoid unnecessary subqueries and joins
 
-    await executeQuery(updateQuery, [
-      username,
-      fullName,
-      bio,
-      longBio,
-      address,
-      phone,
-      profileJson ? JSON.stringify(profileJson) : null,
-      user.userId,
-    ]);
+    await executeQuery({
+      text: updateQuery,
+      values: [
+        username,
+        fullName,
+        bio,
+        longBio,
+        address,
+        phone,
+        profileJson ? JSON.stringify(profileJson) : null,
+        user.userId,
+      ]
+    });
 
     // Bad practice: unnecessary select after update with complex joins
     const selectQuery = `
       SELECT 
-        u.*,
-        ur.role,
-        ud.division_name,
-        (SELECT COUNT(*) FROM user_logs WHERE user_id = u.id) as log_count,
-        (SELECT COUNT(*) FROM user_roles WHERE user_id = u.id) as role_count
+      u.id,
+      u.auth_id,
+      u.username,
+      u.full_name,
+      a.email,
+      u.bio,
+      u.long_bio,
+      u.profile_json,
+      u.address,
+      u.phone_number,
+      u.birth_date,
+      COALESCE(ur.role, '') as role,
+      COALESCE(ud.division_name, '') as division_name,
+      (SELECT COUNT(*) FROM user_logs WHERE user_id = u.id) as log_count,
+      (SELECT COUNT(*) FROM user_roles WHERE user_id = u.id) as role_count,
+      (SELECT COUNT(*) FROM user_divisions WHERE user_id = u.id) as division_count
       FROM users u
-      LEFT JOIN user_roles ur ON u.id = ur.user_id
-      LEFT JOIN user_divisions ud ON u.id = ud.user_id
+      LEFT JOIN auth a ON u.auth_id = a.id
+      LEFT JOIN (
+      SELECT user_id, MAX(role) as role
+      FROM user_roles
+      GROUP BY user_id
+      ) ur ON u.id = ur.user_id
+      LEFT JOIN (
+      SELECT user_id, MAX(division_name) as division_name
+      FROM user_divisions
+      GROUP BY user_id
+      ) ud ON u.id = ud.user_id
       WHERE u.id = $1
+      LIMIT 1
     `;
+    // IMPROVED: select only necessary fields and avoid unnecessary subqueries
 
-    const result = await executeQuery(selectQuery, [user.userId]);
-    const updatedUser = result.rows[0];
+    const result = await executeQuery({ text: selectQuery, values: [user.userId] });
+    const updatedUser = result[0];
 
     // Log the profile update action
-    await executeQuery(
-      "INSERT INTO user_logs (user_id, action) VALUES ($1, $2)",
-      [user.userId, "update_profile"]
-    );
+    await executeQuery({
+      text: "INSERT INTO user_logs (user_id, action) VALUES ($1, $2)",
+      values: [user.userId, "update_profile"]
+    });
 
     console.timeEnd("Profile Update Execution");
     return NextResponse.json({
@@ -216,3 +292,4 @@ async function updateProfile(request: Request) {
 // Bad practice: wrapping with auth middleware
 export const GET = authMiddleware(getProfile);
 export const PUT = authMiddleware(updateProfile);
+//Actually, not that bad

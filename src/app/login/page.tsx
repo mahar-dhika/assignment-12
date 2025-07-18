@@ -16,27 +16,37 @@ export default function LoginPage() {
   const router = useRouter();
 
   // Bad practice: checking auth on every render
-  useEffect(() => {
-    if (!loading) {
-      requireGuest("/users");
-    }
-  }, [loading, user, requireGuest]);
+  const validateEmail = (email: string): string | null => {
+    if (!email) return "Email is required.";
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) return "Please enter a valid email address.";
+    return null;
+  };
 
-  const validate = () => {
+  const validatePassword = (password: string): string | null => {
+    if (password.length < 6) return "Password must be at least 6 characters.";
+    if (!/(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/.test(password)) {
+      return "Password must contain at least one uppercase letter, one lowercase letter, and one number.";
+    }
+    return null;
+  };
+
+  const validateForm = (): boolean => {
+    const emailError = validateEmail(email);
+    const passwordError = validatePassword(password);
+    
     const newErrors: { email?: string; password?: string } = {};
-    if (!email) {
-      newErrors.email = "Email is required.";
-    }
-    if (password.length < 6) {
-      newErrors.password = "Password must be at least 6 characters.";
-    }
+    if (emailError) newErrors.email = emailError;
+    if (passwordError) newErrors.password = passwordError;
+    
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   };
-
+  // >>Refactored validation function with better separation of concerns
+  
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    if (!validate()) {
+    if (!validateForm()) {  // >> changed to use new validation function
       return;
     }
 
@@ -54,14 +64,22 @@ export default function LoginPage() {
       const data = await response.json();
 
       if (response.ok) {
-        // Bad practice: storing token without proper validation
-        login(data.token, data.user);
-        toast.success("Login successful!", { id: toastId });
-        // Redirect to users page after successful login
-        router.push("/users");
+      // Bad practice: storing token without proper validation
+        // Validate token and user data before storing
+        if (data.token && typeof data.token === 'string' && data.user && typeof data.user === 'object') {
+          login(data.token, data.user);
+          toast.success("Login successful!", { id: toastId });
+          // Redirect to users page after successful login
+          router.push("/users");
+        } else {
+          toast.error("Invalid response data received.", { id: toastId });
+        }
       } else {
         toast.error(data.message || "An error occurred.", { id: toastId });
       }
+      // >> Refactored code with proper validation, first to check token and user data
+
+
     } catch (error) {
       console.error("Login error:", error);
       toast.error("Network error occurred.", { id: toastId });

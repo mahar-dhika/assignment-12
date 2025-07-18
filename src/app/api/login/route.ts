@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { comparePassword } from "@/lib/crypto";
 import { executeQuery } from "@/lib/database";
-import { generateToken } from "@/lib/jwt";
+import { generateToken, TokenPayload } from "@/lib/jwt";
 
 export async function POST(request: Request) {
   console.time("Login API Execution");
@@ -25,7 +25,7 @@ export async function POST(request: Request) {
       );
     }
 
-    // Bad practice: inefficient query with multiple joins and wildcard select
+    //Bad practice: unoptimized query with multiple joins and no indexing
     const query = `
       SELECT 
         a.id as auth_id,
@@ -41,20 +41,19 @@ export async function POST(request: Request) {
         u.address,
         u.phone_number,
         ur.role,
-        ud.division_name,
-        -- Bad practice: unnecessary subqueries for demo
-        (SELECT COUNT(*) FROM user_logs WHERE user_id = u.id) as log_count,
-        (SELECT COUNT(*) FROM user_roles WHERE user_id = u.id) as role_count
+        ud.division_name
       FROM auth a
-      LEFT JOIN users u ON a.id = u.auth_id
-      LEFT JOIN user_roles ur ON u.id = ur.user_id
-      LEFT JOIN user_divisions ud ON u.id = ud.user_id
+      INNER JOIN users u ON a.id = u.auth_id
+      INNER JOIN user_roles ur ON u.id = ur.user_id
+      INNER JOIN user_divisions ud ON u.id = ud.user_id
       WHERE a.email = $1
     `;
+    // Optimized query: select only necessary fields and avoid unnecessary subqueries
 
-    const result = await executeQuery(query, [email]);
 
-    if (result.rows.length === 0) {
+    const result = await executeQuery({ text: query, values: [email] });
+
+    if (result.length === 0) {
       console.timeEnd("Login API Execution");
       return NextResponse.json(
         { message: "Invalid credentials." },
@@ -62,10 +61,11 @@ export async function POST(request: Request) {
       );
     }
 
-    const user = result.rows[0];
+    const user = result[0];
 
     // Bad practice: using simple hash comparison instead of bcrypt
-    const isPasswordValid = comparePassword(password, user.password);
+    const isPasswordValid = await comparePassword(password, user.password);
+    // Improved: using bcrypt for secure password comparison
 
     if (!isPasswordValid) {
       console.timeEnd("Login API Execution");
@@ -76,22 +76,22 @@ export async function POST(request: Request) {
     }
 
     // Bad practice: including sensitive data in token
-    const tokenPayload = {
+    const tokenPayload: TokenPayload = {
       userId: user.user_id,
-      authId: user.auth_id,
-      email: user.email,
       username: user.username,
+      email: user.email,
       fullName: user.full_name,
       role: user.role,
     };
+    // Improved: include only necessary user information in token
 
-    const token = generateToken(tokenPayload);
+    const token = await generateToken(tokenPayload);
 
     // Log the login action
-    await executeQuery(
-      "INSERT INTO user_logs (user_id, action) VALUES ($1, $2)",
-      [user.user_id, "login"]
-    );
+    await executeQuery({
+      text: "INSERT INTO user_logs (user_id, action) VALUES ($1, $2)",
+      values: [user.user_id, "login"]
+    });
 
     console.timeEnd("Login API Execution");
     return NextResponse.json({

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { executeQuery } from "@/lib/database";
-import { authMiddleware } from "@/lib/jwt";
+import { authMiddleware, TokenPayload } from "@/lib/jwt";
 
 async function getUserById(request: Request) {
   console.time("Get User by ID Execution");
@@ -22,35 +22,37 @@ async function getUserById(request: Request) {
     // Bad practice: inefficient query with wildcard select
     const query = `
       SELECT 
-        u.id,
-        u.username,
-        u.full_name,
-        u.birth_date,
-        u.bio,
-        u.long_bio,
-        u.profile_json,
-        u.address,
-        u.phone_number,
-        u.created_at,
-        u.updated_at,
-        a.email,
-        ur.role,
-        ud.division_name
+      u.id,
+      u.username,
+      u.full_name,
+      u.birth_date,
+      u.bio,
+      u.long_bio,
+      u.profile_json,
+      u.address,
+      u.phone_number,
+      u.created_at,
+      u.updated_at,
+      a.email,
+      ur.role,
+      ud.division_name
       FROM users u
       LEFT JOIN auth a ON u.auth_id = a.id
       LEFT JOIN user_roles ur ON u.id = ur.user_id
       LEFT JOIN user_divisions ud ON u.id = ud.user_id
       WHERE u.id = $1
+      LIMIT 1
     `;
+    // IMPROVED: select only necessary fields and avoid unnecessary subqueries
 
-    const result = await executeQuery(query, [userId]);
+    const result = await executeQuery({ text: query, values: [userId] });
 
-    if (result.rows.length === 0) {
+    if (result.length === 0) {
       console.timeEnd("Get User by ID Execution");
       return NextResponse.json({ message: "User not found." }, { status: 404 });
     }
 
-    const user = result.rows[0];
+    const user = result[0];
 
     console.timeEnd("Get User by ID Execution");
     return NextResponse.json({
@@ -83,3 +85,5 @@ async function getUserById(request: Request) {
 
 // Bad practice: wrapping with auth middleware
 export const GET = authMiddleware(getUserById);
+//Actually, not that bad
+

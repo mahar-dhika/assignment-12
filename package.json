@@ -15,6 +15,9 @@
   },
   "dependencies": {
     "@primer/css": "17.0.1",
+    "@types/bcrypt": "^5.0.2",
+    "bcrypt": "^6.0.0",
+    "dotenv": "^17.2.0",
     "jsonwebtoken": "^9.0.2",
     "next": "15.3.4",
     "pg": "^8.11.3",

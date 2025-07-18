@@ -27,12 +27,16 @@ export default function ProfilePage() {
   const [address, setAddress] = useState("");
   const [errors, setErrors] = useState<ProfileErrors>({});
   const [loading, setLoading] = useState(true);
-  const { user, requireAuth } = useAuth();
+  const { user, requireAuth, loading: authLoading } = useAuth();
 
   // Bad practice: checking auth on every render
   useEffect(() => {
-    requireAuth("/login");
-  }, [requireAuth]);
+    if (!authLoading) {
+      requireAuth("/login");
+    }
+  }, [authLoading, requireAuth]);
+  // Improved: Check auth only once when auth loading is complete
+
 
   // Bad practice: fetching user data on every render
   useEffect(() => {
@@ -41,6 +45,42 @@ export default function ProfilePage() {
 
       try {
         const token = localStorage.getItem("token");
+        
+        //Improved: Security Improvements Add token validation
+        // Security fix: Add token validation
+        if (!token) {
+          toast.error("No authentication token found. Please login again.");
+          requireAuth("/login");
+          return;
+        }
+        
+        // Basic JWT token format validation
+        const tokenParts = token.split('.');
+        if (tokenParts.length !== 3) {
+          toast.error("Invalid token format. Please login again.");
+          localStorage.removeItem("token");
+          requireAuth("/login");
+          return;
+        }
+        
+        // Check if token is expired (basic check)
+        try {
+          const payload = JSON.parse(atob(tokenParts[1]));
+          const currentTime = Math.floor(Date.now() / 1000);
+          if (payload.exp && payload.exp < currentTime) {
+            toast.error("Token has expired. Please login again.");
+            localStorage.removeItem("token");
+            requireAuth("/login");
+            return;
+          }
+        } catch (tokenError) {
+          toast.error("Invalid token. Please login again.");
+          localStorage.removeItem("token");
+          requireAuth("/login");
+          return;
+        }
+        //Improved: Security Improvements Add token validation
+
         const response = await fetch(`/api/profile`, {
           headers: {
             Authorization: `Bearer ${token}`,
@@ -52,10 +92,12 @@ export default function ProfilePage() {
           const userData = data.user;
 
           // Bad practice: setting state without validation
-          setUsername(userData.username || "");
-          setFullName(userData.fullName || "");
-          setEmail(userData.email || "");
-          setPhone(userData.phoneNumber || "");
+          setUsername(typeof userData.username === 'string' ? userData.username.trim() : "");
+          setFullName(typeof userData.fullName === 'string' ? userData.fullName.trim() : "");
+          setEmail(typeof userData.email === 'string' ? userData.email.trim().toLowerCase() : "");
+          setPhone(typeof userData.phoneNumber === 'string' ? userData.phoneNumber.replace(/\D/g, '') : "");
+          // Improved: setting state with validation and sanitization
+          
           // Fix birth date format for input field
           setBirthDate(
             userData.birthDate ? userData.birthDate.split("T")[0] : ""
@@ -121,6 +163,40 @@ export default function ProfilePage() {
 
     try {
       const token = localStorage.getItem("token");
+      
+      // Security fix: Add token validation
+      if (!token) {
+        toast.error("No authentication token found. Please login again.");
+        requireAuth("/login");
+        return;
+      }
+      
+      // Basic JWT token format validation
+      const tokenParts = token.split('.');
+      if (tokenParts.length !== 3) {
+        toast.error("Invalid token format. Please login again.");
+        localStorage.removeItem("token");
+        requireAuth("/login");
+        return;
+      }
+      
+      // Check if token is expired (basic check)
+      try {
+        const payload = JSON.parse(atob(tokenParts[1]));
+        const currentTime = Math.floor(Date.now() / 1000);
+        if (payload.exp && payload.exp < currentTime) {
+          toast.error("Token has expired. Please login again.");
+          localStorage.removeItem("token");
+          requireAuth("/login");
+          return;
+        }
+      } catch (tokenError) {
+        toast.error("Invalid token. Please login again.");
+        localStorage.removeItem("token");
+        requireAuth("/login");
+        return;
+      }
+      
       const response = await fetch("/api/profile", {
         method: "PUT",
         headers: {

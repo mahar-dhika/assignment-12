@@ -30,6 +30,8 @@ const pool = new Pool({
   database: process.env.DB_NAME || "workshop_db",
   password: process.env.DB_PASSWORD || "admin123",
   port: parseInt(process.env.DB_PORT || "5432"),
+  // SSL configuration for remote databases (like Render)
+  ssl: process.env.DB_HOST && process.env.DB_HOST.includes('render.com') ? { rejectUnauthorized: false } : false,
 });
 
 async function testConnection() {

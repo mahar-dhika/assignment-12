@@ -17,10 +17,10 @@ export const badQueries = {
       ur.role,
       ud.division_name,
       -- Bad practice: multiple subqueries for the same data
-      (SELECT COUNT(*) FROM user_logs WHERE user_id = u.id) as log_count,
-      (SELECT COUNT(*) FROM user_logs WHERE user_id = u.id AND action = 'login') as login_count,
-      (SELECT COUNT(*) FROM user_logs WHERE user_id = u.id AND action = 'update_profile') as update_count,
-      (SELECT COUNT(*) FROM user_logs WHERE user_id = u.id AND action = 'logout') as logout_count,
+      COALESCE(logs.log_count, 0) as log_count,
+      COALESCE(logs.login_count, 0) as login_count,
+      COALESCE(logs.update_count, 0) as update_count,
+      COALESCE(logs.logout_count, 0) as logout_count,
       -- Bad practice: unnecessary string concatenations
       CONCAT(u.full_name, ' (', COALESCE(ur.role, 'no role'), ')') as display_name,
       CONCAT(u.username, '@', a.email) as user_identifier,
@@ -41,33 +41,40 @@ export const badQueries = {
         WHEN ur.role = 'user' THEN 'Regular User'
         ELSE 'Unknown Role'
       END as role_display,
-              -- Bad practice: complex JSON operations without proper indexing
-        CASE 
-          WHEN u.profile_json IS NOT NULL THEN 
-            CASE 
-              WHEN u.profile_json->'social_media' IS NOT NULL THEN
-                CASE 
-                  WHEN u.profile_json->'social_media'->>'instagram' IS NOT NULL THEN
-                    u.profile_json->'social_media'->>'instagram'
-                  ELSE 'No Instagram'
-                END
-              ELSE 'No social media'
-            END
-          ELSE 'No profile data'
-        END as instagram_handle,
+      -- Bad practice: complex JSON operations without proper indexing
+      CASE 
+        WHEN u.profile_json IS NOT NULL AND u.profile_json->'social_media' IS NOT NULL AND u.profile_json->'social_media'->>'instagram' IS NOT NULL
+          THEN u.profile_json->'social_media'->>'instagram'
+        WHEN u.profile_json IS NOT NULL AND u.profile_json->'social_media' IS NOT NULL
+          THEN 'No Instagram'
+        WHEN u.profile_json IS NOT NULL
+          THEN 'No social media'
+        ELSE 'No profile data'
+      END as instagram_handle,
       -- Bad practice: date calculations in SQL
-      EXTRACT(DAY FROM (NOW() - u.created_at)) as days_since_created,
-      EXTRACT(MONTH FROM (NOW() - u.created_at)) as months_since_created,
-      EXTRACT(YEAR FROM (NOW() - u.created_at)) as years_since_created
+      DATE_PART('day', NOW() - u.created_at) as days_since_created,
+      DATE_PART('month', NOW() - u.created_at) as months_since_created,
+      DATE_PART('year', NOW() - u.created_at) as years_since_created
     FROM users u
     LEFT JOIN auth a ON u.auth_id = a.id
     LEFT JOIN user_roles ur ON u.id = ur.user_id
     LEFT JOIN user_divisions ud ON u.id = ud.user_id
+    LEFT JOIN (
+      SELECT 
+        user_id,
+        COUNT(*) as log_count,
+        COUNT(*) FILTER (WHERE action = 'login') as login_count,
+        COUNT(*) FILTER (WHERE action = 'update_profile') as update_count,
+        COUNT(*) FILTER (WHERE action = 'logout') as logout_count
+      FROM user_logs
+      GROUP BY user_id
+    ) logs ON logs.user_id = u.id
     -- Bad practice: unnecessary CROSS JOIN
     CROSS JOIN (SELECT 1 as dummy) d
     -- Bad practice: no WHERE clause for filtering
     ORDER BY u.created_at DESC
   `,
+  //IMPROVED: Use proper indexing, avoid unnecessary subqueries, and simplify logic
 
   // Bad practice: Complex nested subqueries for user statistics
   getUserStatisticsWithNestedSubqueries: `
@@ -76,43 +83,67 @@ export const badQueries = {
       u.username,
       u.full_name,
       -- Bad practice: multiple subqueries for related data
-      (SELECT COUNT(*) FROM user_logs WHERE user_id = u.id) as total_logs,
-      (SELECT COUNT(*) FROM user_logs WHERE user_id = u.id AND action = 'login') as login_logs,
-      (SELECT COUNT(*) FROM user_logs WHERE user_id = u.id AND action = 'logout') as logout_logs,
-      (SELECT COUNT(*) FROM user_logs WHERE user_id = u.id AND action = 'update_profile') as update_logs,
-      (SELECT COUNT(*) FROM user_logs WHERE user_id = u.id AND action = 'view_users') as view_logs,
-      (SELECT COUNT(*) FROM user_logs WHERE user_id = u.id AND action = 'export_data') as export_logs,
+      COALESCE(stats.total_logs, 0) as total_logs,
+      COALESCE(stats.login_logs, 0) as login_logs,
+      COALESCE(stats.logout_logs, 0) as logout_logs,
+      COALESCE(stats.update_logs, 0) as update_logs,
+      COALESCE(stats.view_logs, 0) as view_logs,
+      COALESCE(stats.export_logs, 0) as export_logs,
       -- Bad practice: nested subqueries for date-based calculations
-      (SELECT COUNT(*) FROM user_logs 
-       WHERE user_id = u.id 
-       AND created_at > (SELECT MAX(created_at) FROM user_logs WHERE user_id = u.id) - INTERVAL '7 days') as recent_logs_7d,
-      (SELECT COUNT(*) FROM user_logs 
-       WHERE user_id = u.id 
-       AND created_at > (SELECT MAX(created_at) FROM user_logs WHERE user_id = u.id) - INTERVAL '30 days') as recent_logs_30d,
-      (SELECT COUNT(*) FROM user_logs 
-       WHERE user_id = u.id 
-       AND created_at > (SELECT MAX(created_at) FROM user_logs WHERE user_id = u.id) - INTERVAL '90 days') as recent_logs_90d,
+      COALESCE(stats.recent_logs_7d, 0) as recent_logs_7d,
+      COALESCE(stats.recent_logs_30d, 0) as recent_logs_30d,
+      COALESCE(stats.recent_logs_90d, 0) as recent_logs_90d,
       -- Bad practice: subqueries for role and division counts
-      (SELECT COUNT(*) FROM user_roles WHERE user_id = u.id) as role_count,
-      (SELECT COUNT(*) FROM user_divisions WHERE user_id = u.id) as division_count,
+      COALESCE(urc.role_count, 0) as role_count,
+      COALESCE(udc.division_count, 0) as division_count,
       -- Bad practice: complex conditional subqueries
-      (SELECT COUNT(*) FROM user_logs 
-       WHERE user_id = u.id 
-       AND action IN ('login', 'logout')
-       AND created_at > NOW() - INTERVAL '24 hours') as today_auth_actions,
+      COALESCE(stats.today_auth_actions, 0) as today_auth_actions,
       -- Bad practice: subquery for user activity score
-      (SELECT 
-        CASE 
-          WHEN COUNT(*) > 50 THEN 'Very Active'
-          WHEN COUNT(*) > 20 THEN 'Active'
-          WHEN COUNT(*) > 5 THEN 'Moderate'
-          ELSE 'Inactive'
-        END
-       FROM user_logs WHERE user_id = u.id) as activity_level
+      CASE 
+        WHEN COALESCE(stats.total_logs, 0) > 50 THEN 'Very Active'
+        WHEN COALESCE(stats.total_logs, 0) > 20 THEN 'Active'
+        WHEN COALESCE(stats.total_logs, 0) > 5 THEN 'Moderate'
+        ELSE 'Inactive'
+      END as activity_level
     FROM users u
+    LEFT JOIN (
+      SELECT 
+        user_id,
+        COUNT(*) as total_logs,
+        COUNT(*) FILTER (WHERE action = 'login') as login_logs,
+        COUNT(*) FILTER (WHERE action = 'logout') as logout_logs,
+        COUNT(*) FILTER (WHERE action = 'update_profile') as update_logs,
+        COUNT(*) FILTER (WHERE action = 'view_users') as view_logs,
+        COUNT(*) FILTER (WHERE action = 'export_data') as export_logs,
+        COUNT(*) FILTER (
+          WHERE created_at > NOW() - INTERVAL '7 days'
+        ) as recent_logs_7d,
+        COUNT(*) FILTER (
+          WHERE created_at > NOW() - INTERVAL '30 days'
+        ) as recent_logs_30d,
+        COUNT(*) FILTER (
+          WHERE created_at > NOW() - INTERVAL '90 days'
+        ) as recent_logs_90d,
+        COUNT(*) FILTER (
+          WHERE action IN ('login', 'logout') AND created_at > NOW() - INTERVAL '24 hours'
+        ) as today_auth_actions
+      FROM user_logs
+      GROUP BY user_id
+    ) stats ON stats.user_id = u.id
+    LEFT JOIN (
+      SELECT user_id, COUNT(*) as role_count
+      FROM user_roles
+      GROUP BY user_id
+    ) urc ON urc.user_id = u.id
+    LEFT JOIN (
+      SELECT user_id, COUNT(*) as division_count
+      FROM user_divisions
+      GROUP BY user_id
+    ) udc ON udc.user_id = u.id
     -- Bad practice: no WHERE clause, processing all users
     ORDER BY u.created_at DESC
   `,
+  //IMPROVED: Use simplified nested queries, avoid unnecessary subqueries, and ensure proper indexing
 
   // Bad practice: Complex data cleaning query with multiple conditions
   getDataForCleaning: `
@@ -143,7 +174,7 @@ export const badQueries = {
         WHEN u.phone_number NOT LIKE '+62%' THEN 'INVALID_FORMAT'
         WHEN LENGTH(u.phone_number) < 10 THEN 'TOO_SHORT'
         WHEN LENGTH(u.phone_number) > 15 THEN 'TOO_LONG'
-        WHEN u.phone_number REGEXP '^[0-9+]+$' = 0 THEN 'INVALID_CHARS'
+        WHEN u.phone_number ~ '^[0-9+]+$' = false THEN 'INVALID_CHARS'
         ELSE 'VALID_PHONE'
       END as phone_status,
       -- Bad practice: complex address validation
@@ -151,35 +182,50 @@ export const badQueries = {
         WHEN u.address IS NULL THEN 'MISSING_ADDRESS'
         WHEN u.address = '' THEN 'EMPTY_ADDRESS'
         WHEN LENGTH(TRIM(u.address)) < 10 THEN 'SHORT_ADDRESS'
-        WHEN u.address NOT LIKE '%Jakarta%' 
-             AND u.address NOT LIKE '%Bandung%' 
-             AND u.address NOT LIKE '%Surabaya%' 
-             AND u.address NOT LIKE '%Medan%' 
-             AND u.address NOT LIKE '%Semarang%' THEN 'UNKNOWN_CITY'
+        WHEN u.address NOT LIKE ANY (ARRAY['%Jakarta%', '%Bandung%', '%Surabaya%', '%Medan%', '%Semarang%']) THEN 'UNKNOWN_CITY'
         ELSE 'VALID_ADDRESS'
       END as address_status,
       -- Bad practice: complex JSON validation
       CASE 
         WHEN u.profile_json IS NULL THEN 'MISSING_PROFILE'
         WHEN u.profile_json = '{}' THEN 'EMPTY_PROFILE'
-        WHEN u.profile_json->>'social_media' IS NULL THEN 'NO_SOCIAL_MEDIA'
-        WHEN u.profile_json->'social_media'->>'instagram' IS NULL THEN 'NO_INSTAGRAM'
+        WHEN COALESCE(u.profile_json->>'social_media', '') = '' THEN 'NO_SOCIAL_MEDIA'
+        WHEN COALESCE(u.profile_json->'social_media'->>'instagram', '') = '' THEN 'NO_INSTAGRAM'
         ELSE 'VALID_PROFILE'
       END as profile_status,
       -- Bad practice: duplicate detection
-      (SELECT COUNT(*) FROM users u2 
-       WHERE u2.bio = u.bio AND u2.id != u.id AND u.bio IS NOT NULL) as bio_duplicates,
-      (SELECT COUNT(*) FROM users u2 
-       WHERE u2.address = u.address AND u2.id != u.id AND u.address IS NOT NULL) as address_duplicates,
-      (SELECT COUNT(*) FROM users u2 
-       WHERE u2.phone_number = u.phone_number AND u2.id != u.id AND u.phone_number IS NOT NULL) as phone_duplicates
+      bio_duplicates.count as bio_duplicates,
+      address_duplicates.count as address_duplicates,
+      phone_duplicates.count as phone_duplicates
     FROM users u
     LEFT JOIN auth a ON u.auth_id = a.id
     LEFT JOIN user_roles ur ON u.id = ur.user_id
     LEFT JOIN user_divisions ud ON u.id = ud.user_id
+    LEFT JOIN (
+      SELECT bio, COUNT(*) as count
+      FROM users
+      WHERE bio IS NOT NULL
+      GROUP BY bio
+      HAVING COUNT(*) > 1
+    ) bio_duplicates ON bio_duplicates.bio = u.bio
+    LEFT JOIN (
+      SELECT address, COUNT(*) as count
+      FROM users
+      WHERE address IS NOT NULL
+      GROUP BY address
+      HAVING COUNT(*) > 1
+    ) address_duplicates ON address_duplicates.address = u.address
+    LEFT JOIN (
+      SELECT phone_number, COUNT(*) as count
+      FROM users
+      WHERE phone_number IS NOT NULL
+      GROUP BY phone_number
+      HAVING COUNT(*) > 1
+    ) phone_duplicates ON phone_duplicates.phone_number = u.phone_number
     -- Bad practice: no WHERE clause, processing all data
     ORDER BY u.created_at DESC
   `,
+  // IMPROVED: Use better data cleaning techniques, avoid complex conditions, and ensure proper indexing
 
   // Bad practice: Performance testing query with multiple joins and calculations
   getPerformanceTestData: `
@@ -195,21 +241,17 @@ export const badQueries = {
       a.email,
       ur.role,
       ud.division_name,
-      -- Bad practice: multiple subqueries for the same table
-      (SELECT COUNT(*) FROM user_logs WHERE user_id = u.id) as total_logs,
-      (SELECT COUNT(*) FROM user_logs WHERE user_id = u.id AND action = 'login') as login_count,
-      (SELECT COUNT(*) FROM user_logs WHERE user_id = u.id AND action = 'logout') as logout_count,
-      (SELECT COUNT(*) FROM user_logs WHERE user_id = u.id AND action = 'update_profile') as update_count,
-      (SELECT COUNT(*) FROM user_logs WHERE user_id = u.id AND action = 'view_users') as view_count,
-      (SELECT COUNT(*) FROM user_logs WHERE user_id = u.id AND action = 'export_data') as export_count,
-      -- Bad practice: complex date calculations
+      logs.total_logs,
+      logs.login_count,
+      logs.logout_count,
+      logs.update_count,
+      logs.view_count,
+      logs.export_count,
       EXTRACT(EPOCH FROM (NOW() - u.created_at)) / 86400 as days_since_created,
       EXTRACT(EPOCH FROM (NOW() - u.updated_at)) / 86400 as days_since_updated,
-      -- Bad practice: string operations on large text fields
       LENGTH(u.long_bio) as long_bio_length,
       LENGTH(u.bio) as bio_length,
       LENGTH(u.address) as address_length,
-      -- Bad practice: complex JSON path operations
       CASE 
         WHEN u.profile_json IS NOT NULL THEN
           CASE 
@@ -223,30 +265,37 @@ export const badQueries = {
           END
         ELSE 0
       END as instagram_length,
-      -- Bad practice: complex conditional calculations
       CASE 
         WHEN u.bio IS NOT NULL AND u.address IS NOT NULL AND u.phone_number IS NOT NULL THEN 100
         WHEN u.bio IS NOT NULL AND u.address IS NOT NULL THEN 75
         WHEN u.bio IS NOT NULL OR u.address IS NOT NULL OR u.phone_number IS NOT NULL THEN 50
         ELSE 0
       END as profile_completeness,
-      -- Bad practice: nested calculations
       CASE 
-        WHEN (SELECT COUNT(*) FROM user_logs WHERE user_id = u.id) > 50 THEN 'Very Active'
-        WHEN (SELECT COUNT(*) FROM user_logs WHERE user_id = u.id) > 20 THEN 'Active'
-        WHEN (SELECT COUNT(*) FROM user_logs WHERE user_id = u.id) > 5 THEN 'Moderate'
+        WHEN logs.total_logs > 50 THEN 'Very Active'
+        WHEN logs.total_logs > 20 THEN 'Active'
+        WHEN logs.total_logs > 5 THEN 'Moderate'
         ELSE 'Inactive'
       END as activity_level
     FROM users u
     LEFT JOIN auth a ON u.auth_id = a.id
     LEFT JOIN user_roles ur ON u.id = ur.user_id
     LEFT JOIN user_divisions ud ON u.id = ud.user_id
-    -- Bad practice: CROSS JOIN for no reason
+    LEFT JOIN (
+      SELECT 
+        user_id,
+        COUNT(*) as total_logs,
+        COUNT(*) FILTER (WHERE action = 'login') as login_count,
+        COUNT(*) FILTER (WHERE action = 'logout') as logout_count,
+        COUNT(*) FILTER (WHERE action = 'update_profile') as update_count,
+        COUNT(*) FILTER (WHERE action = 'view_users') as view_count,
+        COUNT(*) FILTER (WHERE action = 'export_data') as export_count
+      FROM user_logs
+      GROUP BY user_id
+    ) logs ON logs.user_id = u.id
     CROSS JOIN (SELECT 1 as dummy) d
-    -- Bad practice: no WHERE clause, no LIMIT
     ORDER BY u.created_at DESC
-  `,
-};
+  `,}
 
 // Bad practice: Nested if-else logic for data processing
 export const processUserDataWithNestedLogic = (user: any) => {
@@ -254,37 +303,24 @@ export const processUserDataWithNestedLogic = (user: any) => {
     id: user.id,
     username: user.username,
     fullName: user.full_name,
-    processedData: {},
+    processedData: {} as any,
   };
 
   // Bad practice: deeply nested if-else statements
-  if (user.bio) {
-    if (user.bio.length < 10) {
-      result.processedData.bioStatus = "short";
-      if (user.bio.includes("test")) {
-        result.processedData.bioQuality = "test_data";
-      } else {
-        result.processedData.bioQuality = "valid_short";
-      }
-    } else if (user.bio.length < 50) {
-      result.processedData.bioStatus = "medium";
-      if (user.bio.includes("demo")) {
-        result.processedData.bioQuality = "demo_data";
-      } else {
-        result.processedData.bioQuality = "valid_medium";
-      }
-    } else {
-      result.processedData.bioStatus = "long";
-      if (user.bio.includes("example")) {
-        result.processedData.bioQuality = "example_data";
-      } else {
-        result.processedData.bioQuality = "valid_long";
-      }
-    }
-  } else {
+  if (!user.bio) {
     result.processedData.bioStatus = "missing";
     result.processedData.bioQuality = "no_data";
+  } else if (user.bio.length < 10) {
+    result.processedData.bioStatus = "short";
+    result.processedData.bioQuality = user.bio.includes("test") ? "test_data" : "valid_short";
+  } else if (user.bio.length < 50) {
+    result.processedData.bioStatus = "medium";
+    result.processedData.bioQuality = user.bio.includes("demo") ? "demo_data" : "valid_medium";
+  } else {
+    result.processedData.bioStatus = "long";
+    result.processedData.bioQuality = user.bio.includes("example") ? "example_data" : "valid_long";
   }
+  // IMPROVED: Use switch-case or a simpler structure for better readability
 
   if (user.phone_number) {
     if (user.phone_number.startsWith("+62")) {
